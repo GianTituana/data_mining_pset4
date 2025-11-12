@@ -1,0 +1,123 @@
+services:
+  # =============================================================================
+  # POSTGRESQL - Base de datos principal
+  # =============================================================================
+  warehouse:
+    image: postgres:13
+    container_name: postgres-warehouse
+    environment:
+      POSTGRES_USER: ${PG_USER:-postgres}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-root}
+      POSTGRES_DB: ${PG_DB:-postgres}
+    volumes:
+      - ./warehouse:/var/lib/postgresql/data:rw
+    ports:
+      - "${PG_PORT:-5432}:5432"
+    networks:
+      - taxi-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # =============================================================================
+  # PGADMIN - Interfaz web para PostgreSQL
+  # =============================================================================
+  warehouseui:
+    image: dpage/pgadmin4
+    container_name: pgadmin-ui
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@admin.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-admin}
+    volumes:
+      - ./warehouseui:/var/lib/pgadmin
+    ports:
+      - "8080:80"
+    networks:
+      - taxi-network
+    depends_on:
+      - warehouse
+
+  # =============================================================================
+  # JUPYTER + SPARK - Entorno de notebooks
+  # =============================================================================
+  spark-notebook:
+    image: jupyter/pyspark-notebook:latest
+    container_name: jupyter-spark-notebook
+    ports:
+      - "8888:8888"    # Jupyter Notebook
+      - "4040:4040"    # Spark UI
+    volumes:
+      - ./work:/home/jovyan/work
+      - ./data:/home/jovyan/data
+    environment:
+      - JUPYTER_TOKEN=${JUPYTER_TOKEN:-}
+      - SPARK_LOCAL_IP=${SPARK_LOCAL_IP:-0.0.0.0}
+      - PYSPARK_PYTHON=python
+      - SPARK_MASTER_HOST=localhost
+      # Variables de PostgreSQL para notebooks
+      - PG_HOST=${PG_HOST:-warehouse}
+      - PG_PORT=${PG_PORT:-5432}
+      - PG_DB=${PG_DB:-postgres}
+      - PG_USER=${PG_USER:-postgres}
+      - PG_PASSWORD=${PG_PASSWORD:-root}
+      - PG_SCHEMA_RAW=${PG_SCHEMA_RAW:-raw}
+      - PG_SCHEMA_ANALYTICS=${PG_SCHEMA_ANALYTICS:-analytics}
+    user: root
+    command: start-notebook.sh --NotebookApp.token='${JUPYTER_TOKEN:-}' --NotebookApp.password=''
+    networks:
+      - taxi-network
+    depends_on:
+      warehouse:
+        condition: service_healthy
+
+  # =============================================================================
+  # OBT BUILDER - Construcción de tabla OBT
+  # =============================================================================
+  obt-builder:
+    image: python:3.11-slim
+    container_name: obt-builder
+    environment:
+      # Configuración de PostgreSQL
+      PG_HOST: ${PG_HOST:-warehouse}
+      PG_PORT: ${PG_PORT:-5432}
+      PG_DB: ${PG_DB:-postgres}
+      PG_USER: ${PG_USER:-postgres}
+      PG_PASSWORD: ${PG_PASSWORD:-root}
+      PG_SCHEMA_RAW: ${PG_SCHEMA_RAW:-raw}
+      PG_SCHEMA_ANALYTICS: ${PG_SCHEMA_ANALYTICS:-analytics}
+      # Configuración de OBT
+      OBT_MODE: ${OBT_MODE:-by-partition}
+      OBT_YEAR_START: ${OBT_YEAR_START:-2023}
+      OBT_YEAR_END: ${OBT_YEAR_END:-2025}
+      OBT_MONTHS: ${OBT_MONTHS:-}
+      OBT_SERVICES: ${SERVICES:-yellow,green}
+      OBT_OVERWRITE: ${OBT_OVERWRITE:-false}
+      RUN_ID: ${RUN_ID:-}
+    volumes:
+      - ./build_obt.py:/app/build_obt.py:ro
+      - ./requirements-obt.txt:/app/requirements-obt.txt:ro
+      - ./logs:/app/logs
+    working_dir: /app
+    networks:
+      - taxi-network
+    depends_on:
+      warehouse:
+        condition: service_healthy
+    # No se ejecuta automáticamente, se ejecuta con: docker compose run obt-builder
+    profiles:
+      - manual
+    entrypoint: >
+      sh -c "
+      echo '=== Instalando dependencias ===' &&
+      apt-get update -qq &&
+      apt-get install -y -qq postgresql-client &&
+      pip install --quiet --no-cache-dir -r requirements-obt.txt &&
+      echo '=== Ejecutando OBT Builder ===' &&
+      python build_obt.py
+      "
+
+networks:
+  taxi-network:
+    driver: bridge
