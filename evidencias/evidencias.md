@@ -13,8 +13,8 @@
 
 # Tabla comparativa de todos los modelos (propios y sklearn) con métricas.
 
-![alt text](image-6.png)
+![alt text](image-11.png)
 
 # FINAL EVALUATION ON TEST SET (2025)
 
-![alt text](image-7.png)
+![alt text](image-12.png)
